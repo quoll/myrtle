@@ -1,6 +1,12 @@
 # myrtle
 A library for working with RDF Turtle.
 
+## Importing
+Myrtle can be included in `deps.edn` with the following in the `:deps` map:
+```clojure
+com.github.quoll/myrtle {:git/sha "57d26eb"}
+```
+
 ## Tables
 For now, this library has been a collection of tools I have been writing to work with RDBMS tables dumped as CSV files.
 
