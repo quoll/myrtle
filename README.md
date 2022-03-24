@@ -4,7 +4,7 @@ A library for working with RDF Turtle.
 ## Importing
 Myrtle can be included in `deps.edn` with the following in the `:deps` map:
 ```clojure
-com.github.quoll/myrtle {:git/sha "57d26eb"}
+com.github.quoll/myrtle {:git/tag "v0.0.1" :git/sha "3763dce"}
 ```
 
 ## Tables
