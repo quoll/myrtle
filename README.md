@@ -60,8 +60,8 @@ The original context can be based on `myrtle.core/base-context` which contains t
 (def spec
  {:context context
   :key "id"
-  :type "ppl"
-  :ptype "ppl-prop"
+  :type "ppl"  ;; the type should appear in the context map
+  :ptype "ppl-prop"  ;; the ptype should appear in the context map
   :colmap {"age" parse-long}})
 ```
 ### RDF Conversion
