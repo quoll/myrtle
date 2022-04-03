@@ -48,8 +48,8 @@
 (defmacro read
   "Reads a single character from a stream"
   [r]
-  #?(:clj (.read r)
-     :cljr (.Read r)))
+  #?(:clj (.read ^Reader r)
+     :cljr (.Read ^Reader r)))
 
 (defmacro append
   "appends a single element to a string builder"
@@ -61,34 +61,93 @@
   "Reads to newline, EOF, or n characters, whichever comes first. Returns a string."
   [^Reader r n]
   (let [StringBuilder s]
-    (loop [i n c (.read r)]
+    (loop [i n c (read r)]
       (if (or (zero? i) (= -1 c) (= nl c) (= rt c))
-        (.toString s)
+        (str s)
         (recur (dec i) (read r))))))
 
 (defmacro readc
   "Reads a character that is not whitespace."
   [r]
-  (loop [^int c (.read ^Reader r)]
+  (loop [^int c (read r)]
     (case c
-      (32 9 10 12 13) (recur (read ^Reader r))
+      (32 9 10 12 13) (recur (read r))
       c)))
 
 (defmacro read-uchar
   "Reads a Unicode escape string.
-  r: The reader that has just returned a \\ characater."
-  [r sb c]
-  (let [encoding (cond
-                   (= \u c) (apply str (read r) (read r) (read r) (read r))
-                   (= \U c) (apply str
-                                   (read r) (read r) (read r) (read r)
-                                   (read r) (read r) (read r) (read r))
-                   :default (do
-                              (append sb)
-                              (throw (ex-info (str "Bad unicode sequence: " sb \\ c) {:char c}))))
+  r: The reader that has just returned \\u or \\U characaters.
+  c: The character read after the \\ character. Should be u or U."
+  [r c]
+  (let [encoding (casei c
+                        \u (str (read r) (read r) (read r) (read r))
+                        \U (str
+                            (read r) (read r) (read r) (read r)
+                            (read r) (read r) (read r) (read r))
+                        (throw (ex-info (str "Bad unicode sequence: \\" c) {:char c})))
         codepoint #?(:clj (Integer/parseInt encoding 16)
                      :cljr (Int32/Parse encoding System.Globalization.NumberStyles/HexNumber))]
     (Character/toString codepoint)))
+
+(defn read-escaped
+  "Reads an escaped character. If the character is u or U, then read more to get the full unicode sequence.
+  r: The reader.
+  c: The character immediately after a \\ character.
+  Returns: The character or string represented by the escape sequence."
+  [^Reader r c]
+  (casei c
+         (\u \U) (read-uchar r c)
+         \t \tab
+         \b \backspace
+         \n \newline
+         \r \return
+         \f \formfeed
+         (\" \' \\) c
+         (throw (ex-info (str "Illegal escape sequence: \\" nxt) {:char c}))))
+
+(defn read-string-literal
+  "Reads a long string literal value"
+  [^Reader r context init]
+  (let [sb (StringBuilder.)]
+    (loop [^int c (read r)]
+      (casei c
+        -1 (throw (ex-info (str "Unexpected end of file while reading long string:" sb) {:str (str sb)}))
+        \\ (->> (read r)
+                (read-escaped r)
+                (append sb))
+        (if (= init c)
+          (let [^int scnd (read c)]
+            (if (= scnd (int init))
+              (let [^int thrd (read c)]
+                (if (= thrd (int init))
+                  (str sb)
+                  (do
+                    (append sb c)
+                    (append sb scnd)
+                    (recur thrd))))
+              (do
+                (append sb c)
+                (recur scnd))))
+          (do
+            (append sb c)
+            (recur (read r))))))))
+
+
+(defn read-string-literal
+  "Reads a literal string value"
+  [^Reader r context init]
+  (let [sb (StringBuilder.)]
+    (loop [^int c (read r)]
+      (casei c
+        -1 (throw (ex-info (str "Unexpected end of file while reading string:" sb) {:str (str sb)}))
+        \\ (->> (read r)
+                (read-escaped r)
+                (append sb))
+        (if (= init c)
+          (str sb)
+          (do
+            (append sb c)
+            (recur (read r))))))))
 
 (def non-iri (set (map int (concat (range 33) "<\"{}|^`"))))
 
@@ -100,8 +159,8 @@
       (cond
         \> (str sb)
         (non-iri c) (throw (ex-info (str "Invalid character in IRI: " sb c) {:char c}))
-        (= \\ c) (let [c (read r)]
-                   (append sb (read-uchar r sb c)))
+        (= \\ c) (let [nxt (read r)]
+                   (append sb (read-uchar! r nxt)))
         :default (append sb (char c))))))
 
 (defn read-pname-ns
@@ -229,9 +288,19 @@
                          \( (let [object (new-node n)]
                               (emit triples subject predicate object)
                               (recur (readc r) :object (ccons :collection object stack)))
-                         (\" \') (let [object (read-literal r @context)]
-                                   (emit triples subject predicate object)
-                                   (recur (readc r) nxt (drop offset stack)))
+                         (\" \') (let [^int scnd (read r)]
+                                   (if (= scnd c)
+                                     (let [^int thrd (read r)]
+                                       (if (= thrd c)
+                                         (let [object (read-long-string-literal r @context c)]
+                                           (emit triples subject predicate object)
+                                           (recur (readc r) nxt (drop offset stack)))
+                                         (do
+                                           (emit triples subject predicate "")
+                                           (recur thrd nxt (drop offset stack)))))
+                                     (let [object (read-string-literal r @context c)]
+                                       (emit triples subject predicate object)
+                                       (recur (readc r) nxt (drop offset stack)))))
                          (\0 \1 \2 \3 \4 \5 \6 \7 \8 \9) (let [object (read-numeric-literal r)]
                                                            (emit triples subject prediate object)
                                                            (recur (readc r) nxt (drop offset stack)))
