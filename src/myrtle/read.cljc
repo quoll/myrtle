@@ -66,6 +66,8 @@
         (str s)
         (recur (dec i) (read r))))))
 
+(def whitespace? #{32 9 10 12 13})
+
 (defmacro readc
   "Reads a character that is not whitespace."
   [r]
@@ -105,7 +107,7 @@
          (\" \' \\) c
          (throw (ex-info (str "Illegal escape sequence: \\" nxt) {:char c}))))
 
-(defn read-string-literal
+(defn read-long-string
   "Reads a long string literal value"
   [^Reader r context init]
   (let [sb (StringBuilder.)]
@@ -133,7 +135,7 @@
             (recur (read r))))))))
 
 
-(defn read-string-literal
+(defn read-string
   "Reads a literal string value"
   [^Reader r context init]
   (let [sb (StringBuilder.)]
@@ -148,6 +150,83 @@
           (do
             (append sb c)
             (recur (read r))))))))
+
+(defn read-lang
+  "Reads a language modifier. This terminates with a non-letter code, so return the terminating char as well"
+  [^Reader r]
+  )
+
+(defn read-type
+  "Reads a type moodifier. Only the first ^ character has already been read"
+  [^Reader r]
+  )
+
+(defn read-emit-literal
+  "Reads a literal, and emits it as a subject/predicate/object to the triples."
+  [^Reader r c context triples subject predicate]
+  (let [^int scnd (read r)]
+    (if (= scnd c) ;; 2 quotes in a row. Either an empty string, or a long form string
+      (let [^int thrd (read r)]
+        (if (= thrd c) ;; 3 quotes in a row, so a long form string.
+          (let [object (read-long-string-literal r @context c)
+                ;; get the next character for possible lang or type
+                ^int nxtc (read r)]
+            (casei nxtc
+                   ;; a lang tag
+                   \@ (let [[lang t] (read-lang r)]
+                        (emit triples subject predicate (lang-literal object lang))
+                        t)
+                   ;; a type tag
+                   \^ (let [ltype (read-type r)]
+                        (emit triples subject predicate (typed-literal object ltype))
+                        (readc r))
+                   ;; no lang or type. If this is whitespace, then skip
+                   (do
+                     (emit triples subject predicate object)
+                     (if (whitespace? nxtc) (readc r) nxtc))))
+          ;; 2 quotes in a row, so an empty literal
+          ;; check for possible lang or type, create and emit literal and return trailing char
+          (casei thrd
+                 \@ (let [[lang t] (read-lang r)]
+                      (emit triples subject predicate (lang-literal "" lang))
+                      t)
+                 \^ (let [ltype (read-type r)]
+                      (emit triples subject predicate (typed-literal "" ltype))
+                      (readc r))
+                 ;; no lang or type. If this is whitespace, then skip
+                 (do
+                   (emit triples subject predicate "")
+                   (if (whitespace? thrd) (readc r) thrd)))))
+      ;; single opening quote. Read a short form literal
+      (let [object (read-string-literal r @context c)
+            ^int nxtc (read r)]
+        ;; check for possible lang or type. Create and emit literal and return trailing char
+        (casei nxtc
+               \@ (let [[lang t] (read-lang r)]
+                    (emit triples subject predicate (lang-literal object lang))
+                    t)
+               \^ (let [ltype (read-type r)]
+                    (emit triples subject predicate (typed-literal object ltype))
+                    (readc r))
+               (do
+                 (emit triples subject predicate object)
+                 (if (whitespace? nxtc) (readc r) nxtc)))))))
+
+(defn read-numeric-literal
+  "Reads a number. This terminates with a non-numeric character, so return the terminating char as well"
+  [^Reader r]
+  )
+
+(defn read-boolean-literal
+  "Reads true or false. Anything else here is an error."
+  [^Reader r c]
+  (if (= c 116)                ;; t
+    (or (and (= (read c) 114)  ;; r
+             (= (read c) 117)  ;; u
+             (= (read c) 101)) ;; e
+        (throw (ex-info "Unexpected characters while reading boolean" {})))
+    ())
+  ())
 
 (def non-iri (set (map int (concat (range 33) "<\"{}|^`"))))
 
@@ -288,25 +367,14 @@
                          \( (let [object (new-node n)]
                               (emit triples subject predicate object)
                               (recur (readc r) :object (ccons :collection object stack)))
-                         (\" \') (let [^int scnd (read r)]
-                                   (if (= scnd c)
-                                     (let [^int thrd (read r)]
-                                       (if (= thrd c)
-                                         (let [object (read-long-string-literal r @context c)]
-                                           (emit triples subject predicate object)
-                                           (recur (readc r) nxt (drop offset stack)))
-                                         (do
-                                           (emit triples subject predicate "")
-                                           (recur thrd nxt (drop offset stack)))))
-                                     (let [object (read-string-literal r @context c)]
-                                       (emit triples subject predicate object)
-                                       (recur (readc r) nxt (drop offset stack)))))
-                         (\0 \1 \2 \3 \4 \5 \6 \7 \8 \9) (let [object (read-numeric-literal r)]
+                         (\" \') (let [t (read-emit-literal r c context triples subject predicate)]
+                                   (recur t nxt (drop offset stack)))
+                         (\0 \1 \2 \3 \4 \5 \6 \7 \8 \9) (let [[object t] (read-numeric-literal r c)]
                                                            (emit triples subject prediate object)
-                                                           (recur (readc r) nxt (drop offset stack)))
+                                                           (recur t nxt (drop offset stack)))
                          (\t \f) (let [object (read-boolean-literal r c)]
                                    (emit triples subject predicate object)
-                                   (recur (readc r nxt (drop offset stack))))
+                                   (recur (readc r) nxt (drop offset stack)))
                          (let [object (read-local r @context)]
                            (emit triples subject predicate object)
                            (recur (readc r) nxt (drop offset stack)))))
