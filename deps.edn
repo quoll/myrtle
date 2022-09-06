@@ -1,4 +1,4 @@
-{:deps {org.clojure/clojure {:mvn/version "1.11.0"}
-        }
- :paths ["src"]
+{:deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        instaparse/instaparse {:mvn/version "1.4.12"}}
+ :paths ["src" "resources"]
  }
